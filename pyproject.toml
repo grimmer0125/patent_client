@@ -1,3 +1,31 @@
+[tool.poetry]
+name = "patent_client"
+version = "0.1.0"
+description = ""
+authors = ["Grimmer <grimmer0125@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+# patent-client = {path = ".", develop = true}
+
+inflection = "^0.5.1"
+lxml = "^4.6.3"
+python-dateutil = "^2.8.1"
+marshmallow = "^3.12.0"
+xmltodict = "^0.12.0"
+beautifulsoup4 = "^4.9.3"
+requests = "^2.25.1"
+requests-cache = "^0.6.3"
+
+[tool.poetry.dev-dependencies]
+codecov = "^2.1.11"
+pytest = "^6.2.4"
+pytest-cov = "^2.11.1"
+bumpversion = "^0.6.0"
+pre-commit = "^2.12.1"
+pytest-xdist = "^2.2.1"
+mypy = "^0.812"
+pandas = "^1.2.4"
 [build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta:__legacy__"
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
