@@ -15,6 +15,7 @@ from .schema import PublicationSchema
 from .parser import FullTextParser
 from .session import session
 
+
 def standardize_date(input):
     if isinstance(input, datetime.date):
         return input.strftime("%Y%m%d")
@@ -22,9 +23,11 @@ def standardize_date(input):
         return input.date().strftime("%Y%m%d")
     else:
         return parse_dt(input).date().strftime("%Y%m%d")
-    
-clean_text = lambda string: re.sub(r"\s+", " ", string).strip()
-clean_number = lambda string: re.sub(r"[^\d]", "", string).strip()
+
+
+def clean_text(string): return re.sub(r"\s+", " ", string).strip()
+def clean_number(string): return re.sub(r"[^\d]", "", string).strip()
+
 
 class FullTextManager(Manager):
     __schema__ = PublicationSchema
@@ -61,31 +64,31 @@ class FullTextManager(Manager):
                 if limit and items_returned > limit:
                     return
                 yield item
-                    
+
     def generate_query(self, query):
         if "query" in query:
             return query['query'][0]
         query_segments = list()
         date_queries = defaultdict(dict)
-        
+
         def handle_query_segment(k, v):
             if "date" in k:
                 kind, *q_type = k.split("_date")
                 kind += "_date"
                 q_type = q_type[0].strip("_")
                 if not q_type:
-                    if "->" in v: # Allow for arrow ranges
+                    if "->" in v:  # Allow for arrow ranges
                         v = v.split("->")
                         q_type = "range"
                     else:
                         q_type = "exact"
                 date_queries[kind][q_type] = v
             else:
-                if k not in self.search_fields: raise ValueError(f"{k} is not a supported search field!")
+                if k not in self.search_fields:
+                    raise ValueError(f"{k} is not a supported search field!")
                 if " " in v:
                     v = f'"{v}"'
                 query_segments.append(f"{self.search_fields[k]}/{v}")
-
 
         # Create normal queries, and divert date queries for separate processing
         for k, v in query.items():
@@ -94,10 +97,11 @@ class FullTextManager(Manager):
                     handle_query_segment(k, i)
             else:
                 handle_query_segment(k, v)
-                
+
         # Handle Date Queries
         for k, v in date_queries.items():
-            if k not in self.search_fields: raise ValueError(f"{k} is not a supported search field!")
+            if k not in self.search_fields:
+                raise ValueError(f"{k} is not a supported search field!")
             if "exact" in v:
                 query_segments.append(f"{self.search_fields[k]}/{standardize_date(v['exact'])}")
             elif "range" in v:
@@ -128,29 +132,53 @@ class FullTextManager(Manager):
 
     def parse_page(self, response_text):
         if ("No patents have matched your query" in response_text
-            or "No application publications have matched your query" in response_text):
+                or "No application publications have matched your query" in response_text):
             self.num_results = 0
             return list()
         soup = bs(response_text, "lxml")
-        self.num_results = int(soup.find_all("i")[1].find_all("strong")[-1].text)
+        # may not find strong elements for patft 1 patent case
         try:
-            results = soup.find_all("table")[1].find_all("tr")[1:]
-            return [
-                self.result_model(
-                    publication_number=clean_number(r.find_all("td")[1].text),
-                    title=clean_text(r.find_all("td")[3].text),) for r in results
-            ]
-             
-        except IndexError: # Publications and Patents are formatted slightly differently:
-            results = soup.find_all("table")[0].find_all("tr")[1:]
-            return [
-                self.result_model(
-                    publication_number=clean_number(r.find_all("td")[1].text),
-                    title=clean_text(r.find_all("td")[2].text),) for r in results
-            ]
+            self.num_results = int(soup.find_all("i")[1].find_all("strong")[-1].text)
+            try:
+                results = soup.find_all("table")[1].find_all("tr")[1:]
+                return [
+                    self.result_model(
+                        publication_number=clean_number(r.find_all("td")[1].text),
+                        title=clean_text(r.find_all("td")[3].text),) for r in results
+                ]
 
+            except IndexError:  # Publications and Patents are formatted slightly differently:
+                results = soup.find_all("table")[0].find_all("tr")[1:]
+                return [
+                    self.result_model(
+                        publication_number=clean_number(r.find_all("td")[1].text),
+                        title=clean_text(r.find_all("td")[2].text),) for r in results
+                ]
+        except IndexError as err:
+            if response_text.find("Single Document"):
+                # workaround way
+                try:
+                    found = re.search('URL=/netacgi/nph-Parser(.+?)">', response_text).group(1)
+                    found = found.replace("&gt;", "%3E")
+                    url = self.search_url + found
+                    # either pats[0].title or pats[0] will enter but requests-cache will only execute once
+                    response = session.get(url)
+                    parsed = FullTextParser().parse(response.text)
+                    title = parsed['title']
+                    publication_number = parsed['publication_number']
+                    self.num_results = 1
+                    return [
+                        self.result_model(
+                            publication_number=clean_number(publication_number),
+                            title=clean_text(title),)
+                    ]
+                except AttributeError:
+                    raise err
+            else:
+                raise err
 
     def get(self, *args, **kwargs):
+
         # Short-circuit this method to fetch a specific patent if only publication_number is passed
         if len(args) == 1 or (len(kwargs) == 1 and "publication_number" in kwargs):
             publication_number = args[0] if args else kwargs['publication_number']
@@ -161,6 +189,7 @@ class FullTextManager(Manager):
             return self.__schema__().deserialize(parsed)
         else:
             return super(FullTextManager, self).get(*args, **kwargs)
+
 
 class ImageManager(Manager):
     def get(self, publication_number):
@@ -173,7 +202,6 @@ class ImageManager(Manager):
             "pdf_url": self.get_pdf_url(soup),
             "sections": self.get_section_data(soup)
         })
-
 
     def get_pdf_url(self, page_soup):
         pdf_path_string = page_soup.find("embed", attrs={"type": "application/pdf"})['src']
@@ -203,22 +231,8 @@ class ImageManager(Manager):
         # Calculate Page Breaks
         total_pages = data[0]['NumPages']
         section_starts = [d['PageNum'] for d in data]
-        section_ends = [p-1 for p in section_starts[1:]] + [total_pages,]
+        section_ends = [p - 1 for p in section_starts[1:]] + [total_pages,]
         sections = list(zip(section_starts, section_ends))
         section_names = [d['name'] for d in data]
         result = dict(zip(section_names, sections))
         return result
-
-
-
-
-        
-
-
-
-
-    
-
-
-
-        
